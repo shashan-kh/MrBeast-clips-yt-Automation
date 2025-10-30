@@ -32,7 +32,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # Write cookies.txt if provided (no 'if:' with secrets; check inside the step)
       - name: Write cookies.txt (optional)
         env:
           COOKIES_B64: ${{ secrets.YTDLP_COOKIES_B64 }}
@@ -61,7 +60,6 @@ jobs:
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
-          # yt-dlp anti-bot settings
           YTDLP_COOKIES: "cookies.txt"
           YTDLP_CLIENT: "android"
         run: |
