@@ -2,7 +2,7 @@ name: Shorts Slot 1
 
 on:
   schedule:
-    - cron: "0 9 * * *"   # 09:00 UTC
+    - cron: "0 9 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -17,7 +17,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -26,13 +25,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
+          yt-dlp --version || true
 
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # Do NOT use 'if:' with secrets; check inside the step instead.
       - name: Write cookies.txt (optional)
         env:
           COOKIES_B64: ${{ secrets.YTDLP_COOKIES_B64 }}
@@ -61,7 +60,6 @@ jobs:
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
-          # yt-dlp options
           YTDLP_COOKIES: "cookies.txt"
           YTDLP_CLIENT: "android"
         run: |
