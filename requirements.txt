@@ -1,0 +1,8 @@
+google-api-python-client==2.147.0
+google-auth==2.34.0
+google-auth-oauthlib==1.2.1
+yt-dlp==2024.10.22
+opencv-python-headless==4.10.0.84
+scenedetect==0.6.4
+webvtt-py==0.4.6
+requests==2.32.3
