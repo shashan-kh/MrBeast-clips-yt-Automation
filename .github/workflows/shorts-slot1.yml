@@ -17,23 +17,32 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
       - name: Install ffmpeg
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
+
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # Write cookies.txt if provided (base64-encoded in secret)
+      # Write cookies.txt if provided (no 'if:' with secrets; check inside the step)
       - name: Write cookies.txt (optional)
-        if: ${{ secrets.YTDLP_COOKIES_B64 != '' }}
+        env:
+          COOKIES_B64: ${{ secrets.YTDLP_COOKIES_B64 }}
         run: |
-          echo "${{ secrets.YTDLP_COOKIES_B64 }}" | base64 -d > cookies.txt
+          if [ -n "${COOKIES_B64}" ]; then
+            echo "$COOKIES_B64" | base64 -d > cookies.txt
+            echo "cookies.txt written."
+          else
+            echo "No YTDLP_COOKIES_B64 secret found; proceeding without cookies."
+          fi
 
       - name: Run automation (1 upload, gated by daily policy)
         env:
