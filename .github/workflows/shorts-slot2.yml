@@ -2,7 +2,7 @@ name: Shorts Slot 2
 
 on:
   schedule:
-    - cron: "0 12 * * *"   # 12:00 UTC
+    - cron: "0 12 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -37,7 +37,7 @@ jobs:
           COOKIES_B64: ${{ secrets.YTDLP_COOKIES_B64 }}
         run: |
           if [ -n "${COOKIES_B64}" ]; then
-            echo "$COOKIES_B64" | base64 -d > cookies.txt
+            printf "%s" "$COOKIES_B64" | base64 -d > cookies.txt
             echo "cookies.txt written."
           else
             echo "No YTDLP_COOKIES_B64 secret found; proceeding without cookies."
