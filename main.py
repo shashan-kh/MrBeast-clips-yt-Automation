@@ -44,6 +44,10 @@ YT_CLIENT_ID = os.getenv("YT_CLIENT_ID")
 YT_CLIENT_SECRET = os.getenv("YT_CLIENT_SECRET")
 YT_REFRESH_TOKEN = os.getenv("YT_REFRESH_TOKEN")
 
+# yt-dlp tuning (cookies + mobile client to avoid "sign in" bot checks)
+YTDLP_CLIENT = os.getenv("YTDLP_CLIENT", "android")  # android|ios|tv|web
+COOKIES_PATH = os.getenv("YTDLP_COOKIES", "").strip()
+
 STATE_PATH = Path("data/state.json")
 WORK_DIR = Path("work")
 WORK_DIR.mkdir(parents=True, exist_ok=True)
@@ -152,12 +156,23 @@ def seconds_from_iso8601_duration(dur: str) -> float:
     h = int(m.group(1) or 0); mm = int(m.group(2) or 0); s = int(m.group(3) or 0)
     return h*3600 + mm*60 + s
 
+# ------------------------- yt-dlp helpers -------------------------
+def ytdlp_common_args() -> List[str]:
+    args: List[str] = []
+    if COOKIES_PATH and Path(COOKIES_PATH).exists():
+        args += ["--cookies", COOKIES_PATH]
+    if YTDLP_CLIENT:
+        args += ["--extractor-args", f"youtube:player_client={YTDLP_CLIENT}"]
+    args += ["--sleep-requests", "1:3", "--retries", "10", "--retry-sleep", "1:3"]
+    return args
+
 # ------------------------- Scene detection & planning -------------------------
 def download_video_lowres(video_id: str, out_dir: Path) -> Path:
     out_tmpl = str(out_dir / f"{video_id}.%(ext)s")
     url = f"https://www.youtube.com/watch?v={video_id}"
     cmd = [
         "yt-dlp",
+        *ytdlp_common_args(),
         "-f", "bv*[height<=480][ext=mp4]+ba/b[ext=mp4][height<=480]/b",
         "--merge-output-format", "mp4",
         "-o", out_tmpl, url
@@ -233,7 +248,9 @@ def try_download_auto_captions(video_id: str, lang: str = "en") -> Optional[Path
     url = f"https://www.youtube.com/watch?v={video_id}"
     out_tmpl = str(WORK_DIR / f"{video_id}.%(ext)s")
     cmd = [
-        "yt-dlp", "--skip-download",
+        "yt-dlp",
+        *ytdlp_common_args(),
+        "--skip-download",
         "--write-auto-sub", "--sub-lang", lang, "--convert-subs", "vtt",
         "-o", out_tmpl, url
     ]
@@ -244,39 +261,13 @@ def try_download_auto_captions(video_id: str, lang: str = "en") -> Optional[Path
     cand = WORK_DIR / f"{video_id}.{lang}.vtt"
     return cand if cand.exists() else None
 
-def extract_keywords_for_segment(vtt_path: Path, start: float, end: float, topk: int = 4) -> List[str]:
-    if not vtt_path or not vtt_path.exists():
-        return []
-    text = []
-    try:
-        for c in webvtt.read(str(vtt_path)):
-            s = getattr(c, "start_in_seconds", None)
-            e = getattr(c, "end_in_seconds", None)
-            if s is None or e is None:
-                def p(ts: str):
-                    h, m, sec = ts.split(":")
-                    return int(h)*3600 + int(m)*60 + float(sec.replace(',', '.'))
-                s = p(c.start); e = p(c.end)
-            if e < start or s > end:
-                continue
-            text.append(c.text)
-    except Exception:
-        return []
-    doc = " ".join(text).lower()
-    tokens = re.findall(r"[a-zA-Z][a-zA-Z']{2,}", doc)
-    freq: Dict[str, int] = {}
-    for t in tokens:
-        if t in STOPWORDS: continue
-        freq[t] = freq.get(t, 0) + 1
-    ranked = sorted(freq.items(), key=lambda x: (-x[1], -len(x[0])))
-    return [w for w,_ in ranked[:topk]]
-
 # ------------------------- Download & Render -------------------------
 def download_full_video_hd(video_id: str, out_dir: Path) -> Path:
     out_path = out_dir / f"{video_id}.mp4"
     url = f"https://www.youtube.com/watch?v={video_id}"
     cmd = [
         "yt-dlp",
+        *ytdlp_common_args(),
         "-f", "bv*[height<=1080][ext=mp4]+ba/b[ext=mp4][height<=1080]/b",
         "--merge-output-format", "mp4",
         "-o", str(out_path),
