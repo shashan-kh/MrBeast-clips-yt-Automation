@@ -13,7 +13,6 @@ def main():
         sys.exit(1)
     # Use a Desktop App OAuth client JSON (top-level key "installed").
     flow = InstalledAppFlow.from_client_secrets_file(sys.argv[1], SCOPES)
-    # Do not pass include_granted_scopes here.
     creds = flow.run_local_server(port=0, access_type="offline", prompt="consent")
     print(creds.refresh_token or "")
 
