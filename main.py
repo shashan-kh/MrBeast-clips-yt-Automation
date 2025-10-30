@@ -21,9 +21,9 @@ SOURCE_CHANNEL_ID = os.getenv("SOURCE_CHANNEL_ID", "").strip()
 DAILY_UPLOADS = int(os.getenv("DAILY_UPLOADS", "1"))
 
 # Daily policy (dynamic per video)
-DAILY_BASE = int(os.getenv("DAILY_BASE", "3"))                 # default daily uploads
-DAILY_BOOST = int(os.getenv("DAILY_BOOST", "5"))               # boosted daily uploads
-DAILY_BOOST_THRESHOLD = int(os.getenv("DAILY_BOOST_THRESHOLD", "21"))  # if clips > this, use DAILY_BOOST
+DAILY_BASE = int(os.getenv("DAILY_BASE", "3"))
+DAILY_BOOST = int(os.getenv("DAILY_BOOST", "5"))
+DAILY_BOOST_THRESHOLD = int(os.getenv("DAILY_BOOST_THRESHOLD", "21"))
 
 # Clip lengths + scene detection
 MIN_SHORT_SEC = int(os.getenv("MIN_SHORT_SEC", "20"))
@@ -44,10 +44,15 @@ YT_CLIENT_ID = os.getenv("YT_CLIENT_ID")
 YT_CLIENT_SECRET = os.getenv("YT_CLIENT_SECRET")
 YT_REFRESH_TOKEN = os.getenv("YT_REFRESH_TOKEN")
 
-# yt-dlp tuning (cookies + mobile client to avoid "sign in" bot checks)
-YTDLP_CLIENT = os.getenv("YTDLP_CLIENT", "android")  # android|ios|web|tv
+# yt-dlp tuning (avoid anti-bot)
 COOKIES_PATH = os.getenv("YTDLP_COOKIES", "").strip()
+YTDLP_PLAYER_CLIENTS = os.getenv("YTDLP_PLAYER_CLIENTS", "tv_embedded,tv,ios,mweb,web,android")
 YTDLP_UA = os.getenv("YTDLP_UA", "Mozilla/5.0 (Linux; Android 12; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36")
+# Optional PO tokens for clients that require it (android/web)
+YTDLP_PO_TOKEN_ANDROID = os.getenv("YTDLP_PO_TOKEN_ANDROID", "").strip()
+YTDLP_PO_TOKEN_WEB = os.getenv("YTDLP_PO_TOKEN_WEB", "").strip()
+# Extra raw extractor args (optional, advanced), e.g. "hl=en,gl=US"
+YTDLP_EXTRACTOR_ARGS_EXTRA = os.getenv("YTDLP_EXTRACTOR_ARGS_EXTRA", "").strip()
 
 STATE_PATH = Path("data/state.json")
 WORK_DIR = Path("work")
@@ -163,37 +168,42 @@ def ytdlp_common_args() -> List[str]:
     args += ["--ignore-config", "--force-ipv4"]
     if COOKIES_PATH and Path(COOKIES_PATH).exists():
         args += ["--cookies", COOKIES_PATH]
-    if YTDLP_CLIENT:
-        args += ["--extractor-args", f"youtube:player_client={YTDLP_CLIENT}"]
     if YTDLP_UA:
         args += ["--user-agent", YTDLP_UA]
-    # Use fixed seconds (not min:max). The previous 1:3 format caused an error.
+    # Use fixed seconds (not min:max) to avoid parsing errors.
     args += ["--sleep-requests", "2", "--retries", "10", "--retry-sleep", "2"]
     return args
 
+def build_extractor_args_for_client(client: str) -> List[str]:
+    parts = [f"player_client={client}"]
+    if client.startswith("android") and YTDLP_PO_TOKEN_ANDROID:
+        parts.append(f"po_token=android+{YTDLP_PO_TOKEN_ANDROID}")
+    if client.startswith("web") and YTDLP_PO_TOKEN_WEB:
+        parts.append(f"po_token=web+{YTDLP_PO_TOKEN_WEB}")
+    if YTDLP_EXTRACTOR_ARGS_EXTRA:
+        # Append raw extras (comma-separated key=val)
+        parts.append(YTDLP_EXTRACTOR_ARGS_EXTRA)
+    return ["--extractor-args", f"youtube:{','.join(parts)}"]
+
 def ytdlp_try(cmd_base: List[str], try_clients: List[str]) -> None:
-    tried = []
-    unique = []
-    for c in try_clients:
-        if c and c not in unique:
-            unique.append(c)
-    for client in unique:
-        tried.append(client)
-        cmd = cmd_base[:]
-        # replace/append player_client per attempt
-        if "--extractor-args" in cmd:
-            idx = cmd.index("--extractor-args")
-            cmd[idx+1] = f"youtube:player_client={client}"
-        else:
-            cmd += ["--extractor-args", f"youtube:player_client={client}"]
-        print(f"Trying yt-dlp with player_client={client} ...")
+    seen = []
+    for client in try_clients:
+        c = client.strip()
+        if not c or c in seen:
+            continue
+        seen.append(c)
+        cmd = cmd_base[:] + build_extractor_args_for_client(c)
+        print(f"Trying yt-dlp with player_client={c} ...")
         try:
             run_cmd(cmd)
             return
         except subprocess.CalledProcessError as e:
-            print(f"yt-dlp failed with client={client}, code={e.returncode}")
+            print(f"yt-dlp failed with client={c}, code={e.returncode}")
             time.sleep(2)
-    raise RuntimeError(f"yt-dlp failed with clients {tried}")
+    raise RuntimeError(f"yt-dlp failed with clients {seen}")
+
+def parse_client_list(s: str) -> List[str]:
+    return [x.strip() for x in s.split(",") if x.strip()]
 
 # ------------------------- Scene detection & planning -------------------------
 def download_video_lowres(video_id: str, out_dir: Path) -> Path:
@@ -206,8 +216,7 @@ def download_video_lowres(video_id: str, out_dir: Path) -> Path:
         "--merge-output-format", "mp4",
         "-o", out_tmpl, url
     ]
-    # try sequence: env client, then ios, web, android
-    prefs = [c for c in [YTDLP_CLIENT, "ios", "web", "android"] if c]
+    prefs = parse_client_list(YTDLP_PLAYER_CLIENTS)
     ytdlp_try(cmd_base, prefs)
     for ext in (".mp4", ".mkv", ".webm", ".mov"):
         p = out_dir / f"{video_id}{ext}"
@@ -286,7 +295,7 @@ def try_download_auto_captions(video_id: str, lang: str = "en") -> Optional[Path
         "-o", out_tmpl, url
     ]
     try:
-        prefs = [c for c in [YTDLP_CLIENT, "ios", "web", "android"] if c]
+        prefs = parse_client_list(YTDLP_PLAYER_CLIENTS)
         ytdlp_try(cmd_base, prefs)
     except Exception:
         return None
@@ -305,7 +314,7 @@ def download_full_video_hd(video_id: str, out_dir: Path) -> Path:
         "-o", str(out_path),
         url
     ]
-    prefs = [c for c in [YTDLP_CLIENT, "ios", "web", "android"] if c]
+    prefs = parse_client_list(YTDLP_PLAYER_CLIENTS)
     ytdlp_try(cmd_base, prefs)
     if out_path.exists():
         return out_path
@@ -407,32 +416,29 @@ def gh_delete_git_tag(tag: str):
         r.raise_for_status()
 
 def cleanup_release_storage(storage: Dict[str, Any]):
-    if not storage: 
+    if not storage:
         return
     if not GITHUB_REPOSITORY:
         print("Cleanup skipped: GITHUB_REPOSITORY not set.")
         return
     tag = storage.get("tag")
-    if not tag: 
+    if not tag:
         return
     rel = gh_get_release_by_tag(tag)
     if not rel:
         print(f"No release found for tag {tag}, nothing to clean.")
         return
-    # Delete all assets in the release
     for a in rel.get("assets", []):
         try:
             print(f"Deleting asset {a['name']} (id={a['id']})...")
             gh_delete_release_asset(a["id"])
         except Exception as e:
             print(f"Asset delete failed: {e}")
-    # Delete the release itself
     try:
         print(f"Deleting release id={rel['id']} for tag {tag}...")
         gh_delete_release(rel["id"])
     except Exception as e:
         print(f"Release delete failed: {e}")
-    # Optionally delete the tag ref
     if CLEANUP_DELETE_TAG:
         try:
             print(f"Deleting git tag ref {tag}...")
@@ -550,17 +556,15 @@ def main():
 
     try:
         youtube = get_youtube_client()
-        who_am_i(youtube)  # sanity: prints which channel this token uploads to
+        who_am_i(youtube)
     except RefreshError as e:
-        raise RuntimeError("OAuth token refresh failed (invalid_scope/invalid_grant). "
-                           "Re-generate the refresh token with BOTH scopes: youtube.upload and youtube.readonly, "
-                           "and select the Brand Account channel during consent.") from e
+        raise RuntimeError("OAuth token refresh failed. Re-generate refresh token with BOTH scopes "
+                           "(youtube.upload & youtube.readonly) and select your Brand Account.") from e
     except HttpError as e:
         raise RuntimeError(f"YouTube API error on init: {e}") from e
 
     state = load_state()
 
-    # Reset daily counter if date changed
     if not state.get("daily") or state["daily"].get("date") != today_str():
         state["daily"] = {"date": today_str(), "uploaded": 0}
         save_state(state)
@@ -570,8 +574,9 @@ def main():
         current = state["current"]
     else:
         # Pick next unprocessed long-form video
-        all_ids = list_channel_video_ids(youtube, SOURCE_CHANNEL_ID, max_items=300)
-        meta = get_video_meta(youtube, all_ids)
+        youtube_client = youtube
+        all_ids = list_channel_video_ids(youtube_client, SOURCE_CHANNEL_ID, max_items=300)
+        meta = get_video_meta(youtube_client, all_ids)
         candidates = []
         for vid in all_ids:
             if vid in state["processed_video_ids"]:
@@ -650,9 +655,7 @@ def main():
     if uploaded_today >= allowed_today:
         print(f"Daily limit reached ({uploaded_today}/{allowed_today}). Skipping this slot.")
         return
-    # ---------------------------------------------------------------
 
-    # Only 1 per run (spaced schedules).
     to_upload = [seg for seg in current["segments"] if seg["status"] == "pending"][:DAILY_UPLOADS]
     if not to_upload:
         if CLEANUP_RELEASE_ON_COMPLETE:
@@ -696,7 +699,6 @@ def main():
 
         yt_video_id = upload_short(youtube, tmp_clip, title, description, tags)
 
-        # Mark uploaded + cleanup temp
         seg["status"] = "uploaded"
         seg["upload_id"] = yt_video_id
         uploaded_count += 1
