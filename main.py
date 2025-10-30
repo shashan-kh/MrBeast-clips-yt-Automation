@@ -45,8 +45,9 @@ YT_CLIENT_SECRET = os.getenv("YT_CLIENT_SECRET")
 YT_REFRESH_TOKEN = os.getenv("YT_REFRESH_TOKEN")
 
 # yt-dlp tuning (cookies + mobile client to avoid "sign in" bot checks)
-YTDLP_CLIENT = os.getenv("YTDLP_CLIENT", "android")  # android|ios|tv|web
+YTDLP_CLIENT = os.getenv("YTDLP_CLIENT", "android")  # android|ios|web|tv
 COOKIES_PATH = os.getenv("YTDLP_COOKIES", "").strip()
+YTDLP_UA = os.getenv("YTDLP_UA", "Mozilla/5.0 (Linux; Android 12; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36")
 
 STATE_PATH = Path("data/state.json")
 WORK_DIR = Path("work")
@@ -164,13 +165,19 @@ def ytdlp_common_args() -> List[str]:
         args += ["--cookies", COOKIES_PATH]
     if YTDLP_CLIENT:
         args += ["--extractor-args", f"youtube:player_client={YTDLP_CLIENT}"]
-    # Polite retries (min:max syntax)
-    args += ["--sleep-requests", "1:3", "--retries", "10", "--retry-sleep", "1:3"]
+    if YTDLP_UA:
+        args += ["--user-agent", YTDLP_UA]
+    # Use fixed seconds (not min:max). The previous 1:3 format caused an error.
+    args += ["--sleep-requests", "2", "--retries", "10", "--retry-sleep", "2"]
     return args
 
 def ytdlp_try(cmd_base: List[str], try_clients: List[str]) -> None:
     tried = []
-    for client in try_clients:
+    unique = []
+    for c in try_clients:
+        if c and c not in unique:
+            unique.append(c)
+    for client in unique:
         tried.append(client)
         cmd = cmd_base[:]
         # replace/append player_client per attempt
@@ -199,10 +206,9 @@ def download_video_lowres(video_id: str, out_dir: Path) -> Path:
         "--merge-output-format", "mp4",
         "-o", out_tmpl, url
     ]
-    # try sequence: env client, then ios, then web, then android
+    # try sequence: env client, then ios, web, android
     prefs = [c for c in [YTDLP_CLIENT, "ios", "web", "android"] if c]
     ytdlp_try(cmd_base, prefs)
-
     for ext in (".mp4", ".mkv", ".webm", ".mov"):
         p = out_dir / f"{video_id}{ext}"
         if p.exists(): return p
@@ -301,7 +307,6 @@ def download_full_video_hd(video_id: str, out_dir: Path) -> Path:
     ]
     prefs = [c for c in [YTDLP_CLIENT, "ios", "web", "android"] if c]
     ytdlp_try(cmd_base, prefs)
-
     if out_path.exists():
         return out_path
     for ext in (".mkv", ".webm", ".mov"):
