@@ -7,6 +7,8 @@ import requests
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
+from google.auth.exceptions import RefreshError
+from googleapiclient.errors import HttpError
 
 from scenedetect import VideoManager, SceneManager
 from scenedetect.detectors import ContentDetector
@@ -15,23 +17,25 @@ import webvtt
 # ------------------------- Config via env -------------------------
 SOURCE_CHANNEL_ID = os.getenv("SOURCE_CHANNEL_ID", "").strip()
 
-DAILY_UPLOADS = int(os.getenv("DAILY_UPLOADS", "1"))  # each slot uploads at most 1
+# Spaced scheduling: each workflow uploads at most 1 per run.
+DAILY_UPLOADS = int(os.getenv("DAILY_UPLOADS", "1"))
 
-# Dynamic policy: 3/day if <=21 clips, else 5/day
-DAILY_BASE = int(os.getenv("DAILY_BASE", "3"))
-DAILY_BOOST = int(os.getenv("DAILY_BOOST", "5"))
-DAILY_BOOST_THRESHOLD = int(os.getenv("DAILY_BOOST_THRESHOLD", "21"))
+# Daily policy (dynamic per video)
+DAILY_BASE = int(os.getenv("DAILY_BASE", "3"))                 # default daily uploads
+DAILY_BOOST = int(os.getenv("DAILY_BOOST", "5"))               # boosted daily uploads
+DAILY_BOOST_THRESHOLD = int(os.getenv("DAILY_BOOST_THRESHOLD", "21"))  # if clips > this, use DAILY_BOOST
 
+# Clip lengths + scene detection
 MIN_SHORT_SEC = int(os.getenv("MIN_SHORT_SEC", "20"))
 MAX_SHORT_SEC = int(os.getenv("MAX_SHORT_SEC", "58"))
 TARGET_SHORT_SEC = int(os.getenv("TARGET_SHORT_SEC", "45"))
 SCENE_THRESHOLD = float(os.getenv("SCENE_THRESHOLD", "27.0"))
 
-# Cleanup settings
+# Cleanup toggles
 CLEANUP_RELEASE_ON_COMPLETE = os.getenv("CLEANUP_RELEASE_ON_COMPLETE", "true").lower() in ("1","true","yes","y")
 CLEANUP_DELETE_TAG = os.getenv("CLEANUP_DELETE_TAG", "true").lower() in ("1","true","yes","y")
 
-# GitHub Releases
+# GitHub (for Releases storage)
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 GITHUB_REPOSITORY = os.getenv("GITHUB_REPOSITORY", "")  # owner/repo
 
@@ -85,16 +89,31 @@ def get_youtube_client():
         token_uri="https://oauth2.googleapis.com/token",
         client_id=YT_CLIENT_ID,
         client_secret=YT_CLIENT_SECRET,
-        scopes=["https://www.googleapis.com/auth/youtube.upload", "https://www.googleapis.com/auth/youtube.readonly"],
+        scopes=[
+            "https://www.googleapis.com/auth/youtube.upload",
+            "https://www.googleapis.com/auth/youtube.readonly",
+        ],
     )
     return build("youtube", "v3", credentials=creds)
+
+def who_am_i(youtube):
+    try:
+        me = youtube.channels().list(part="snippet,contentDetails", mine=True).execute()
+        items = me.get("items", [])
+        if items:
+            it = items[0]
+            print(f"Uploading to channel: {it['snippet']['title']} ({it['id']})")
+        else:
+            print("Warning: Token has no channel associated (did you authorize the Brand Account's channel?).")
+    except Exception as e:
+        print(f"Channel check failed: {e}")
 
 # ------------------------- YouTube API helpers -------------------------
 def get_uploads_playlist_id(youtube, channel_id: str) -> str:
     resp = youtube.channels().list(part="contentDetails", id=channel_id).execute()
     items = resp.get("items", [])
     if not items:
-        raise RuntimeError("Channel not found or no contentDetails.")
+        raise RuntimeError("Channel not found or no contentDetails for SOURCE_CHANNEL_ID.")
     return items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
 
 def list_channel_video_ids(youtube, channel_id: str, max_items=200) -> List[str]:
@@ -343,34 +362,34 @@ def gh_download_to(url: str, dest_path: Path):
                     f.write(chunk)
 
 def gh_delete_release_asset(asset_id: int):
-  owner, repo = gh_owner_repo()
-  url = f"https://api.github.com/repos/{owner}/{repo}/releases/assets/{asset_id}"
-  r = requests.delete(url, headers=gh_headers())
-  if r.status_code not in (204, 404):
-      r.raise_for_status()
+    owner, repo = gh_owner_repo()
+    url = f"https://api.github.com/repos/{owner}/{repo}/releases/assets/{asset_id}"
+    r = requests.delete(url, headers=gh_headers())
+    if r.status_code not in (204, 404):
+        r.raise_for_status()
 
 def gh_delete_release(release_id: int):
-  owner, repo = gh_owner_repo()
-  url = f"https://api.github.com/repos/{owner}/{repo}/releases/{release_id}"
-  r = requests.delete(url, headers=gh_headers())
-  if r.status_code not in (204, 404):
-      r.raise_for_status()
+    owner, repo = gh_owner_repo()
+    url = f"https://api.github.com/repos/{owner}/{repo}/releases/{release_id}"
+    r = requests.delete(url, headers=gh_headers())
+    if r.status_code not in (204, 404):
+        r.raise_for_status()
 
 def gh_delete_git_tag(tag: str):
-  owner, repo = gh_owner_repo()
-  url = f"https://api.github.com/repos/{owner}/{repo}/git/refs/tags/{tag}"
-  r = requests.delete(url, headers=gh_headers())
-  if r.status_code not in (204, 404):
-      r.raise_for_status()
+    owner, repo = gh_owner_repo()
+    url = f"https://api.github.com/repos/{owner}/{repo}/git/refs/tags/{tag}"
+    r = requests.delete(url, headers=gh_headers())
+    if r.status_code not in (204, 404):
+        r.raise_for_status()
 
 def cleanup_release_storage(storage: Dict[str, Any]):
-    if not storage:
+    if not storage: 
         return
     if not GITHUB_REPOSITORY:
         print("Cleanup skipped: GITHUB_REPOSITORY not set.")
         return
     tag = storage.get("tag")
-    if not tag:
+    if not tag: 
         return
     rel = gh_get_release_by_tag(tag)
     if not rel:
@@ -504,17 +523,23 @@ def extract_clip(zip_path: Path, video_id: str, clip_index: int, out_path: Path)
 def main():
     if not SOURCE_CHANNEL_ID:
         raise RuntimeError("Please set SOURCE_CHANNEL_ID secret.")
-    if not GITHUB_REPOSITORY:
-        print("Warning: GITHUB_REPOSITORY not set. Releases will not be created (local test mode).")
+
+    try:
+        youtube = get_youtube_client()
+        who_am_i(youtube)  # sanity: prints which channel this token uploads to
+    except RefreshError as e:
+        raise RuntimeError("OAuth token refresh failed (invalid_scope/invalid_grant). "
+                           "Re-generate the refresh token with BOTH scopes: youtube.upload and youtube.readonly, "
+                           "and select the Brand Account channel during consent.") from e
+    except HttpError as e:
+        raise RuntimeError(f"YouTube API error on init: {e}") from e
 
     state = load_state()
 
-    # Reset daily counter if date changed (UTC)
+    # Reset daily counter if date changed
     if not state.get("daily") or state["daily"].get("date") != today_str():
         state["daily"] = {"date": today_str(), "uploaded": 0}
         save_state(state)
-
-    youtube = get_youtube_client()
 
     # Continue with current video if pending segments exist
     if state.get("current") and any(seg["status"] == "pending" for seg in state["current"]["segments"]):
@@ -603,19 +628,18 @@ def main():
         return
     # ---------------------------------------------------------------
 
-    # Only 1 per run (spaced slots).
+    # Only 1 per run (spaced schedules).
     to_upload = [seg for seg in current["segments"] if seg["status"] == "pending"][:DAILY_UPLOADS]
     if not to_upload:
-        # All segments uploaded for this video
         if CLEANUP_RELEASE_ON_COMPLETE:
             try:
                 cleanup_release_storage(current.get("storage", {}))
             except Exception as e:
-                print(f"Cleanup warning: {e}")
+                print(f"[cleanup] Warning: {e}")
         state["processed_video_ids"].append(current["video_id"])
         state["current"] = None
         save_state(state)
-        print("Finished all segments for current video. Cleaned release assets. Will pick a new one next run.")
+        print("Finished all segments for current video. Cleanup complete. Will pick a new one next run.")
         return
 
     src_id = current["video_id"]
@@ -630,6 +654,7 @@ def main():
     else:
         raise RuntimeError("Missing pre-render storage info; expected to have release ZIP.")
 
+    uploaded_count = 0
     for seg in to_upload:
         idx = current["segments"].index(seg)
         start, end = seg["start"], seg["end"]
@@ -650,6 +675,7 @@ def main():
         # Mark uploaded + cleanup temp
         seg["status"] = "uploaded"
         seg["upload_id"] = yt_video_id
+        uploaded_count += 1
         state["daily"]["uploaded"] = state.get("daily", {}).get("uploaded", 0) + 1
         save_state(state)
         try:
@@ -657,15 +683,14 @@ def main():
         except Exception:
             pass
 
-        print(f"Uploaded 1 this run. Today: {state['daily']['uploaded']}/{allowed_today}")
+        print(f"Uploaded {uploaded_count}/{DAILY_UPLOADS} this run. Today: {state['daily']['uploaded']}/{allowed_today}")
 
-    # If no pending segments remain now, cleanup release and advance
     if not any(s["status"] == "pending" for s in current["segments"]):
         if CLEANUP_RELEASE_ON_COMPLETE:
             try:
                 cleanup_release_storage(current.get("storage", {}))
             except Exception as e:
-                print(f"Cleanup warning: {e}")
+                print(f"[cleanup] Warning: {e}")
         state["processed_video_ids"].append(current["video_id"])
         state["current"] = None
 
