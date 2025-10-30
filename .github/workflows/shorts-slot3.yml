@@ -61,7 +61,9 @@ jobs:
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
           YTDLP_COOKIES: "cookies.txt"
-          YTDLP_CLIENT: "android"
+          YTDLP_PLAYER_CLIENTS: "tv_embedded,tv,ios,mweb,web,android"
+          YTDLP_PO_TOKEN_ANDROID: ${{ secrets.YTDLP_PO_TOKEN_ANDROID }}
+          YTDLP_PO_TOKEN_WEB: ${{ secrets.YTDLP_PO_TOKEN_WEB }}
         run: |
           python main.py
 
