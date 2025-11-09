@@ -11,6 +11,7 @@ concurrency:
 
 permissions:
   contents: write
+  issues: write # <-- NEW PERMISSION to create issues
 
 jobs:
   run:
@@ -66,14 +67,14 @@ jobs:
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
           YTDLP_COOKIES: "cookies.txt"
-          YTDLP_PLAYER_CLIENTS: "tv_embedded,tv,ios,mweb,web"
+          YTDLP_PLAYER_CLIENTS: "tv_embedded,tv,ios,mweb,web" # <-- Removed 'android'
           YTDLP_PO_TOKEN_ANDROID: ${{ secrets.YTDLP_PO_TOKEN_ANDROID }}
           YTDLP_PO_TOKEN_WEB: ${{ secrets.YTDLP_PO_TOKEN_WEB }}
         run: |
           python main.py
 
       - name: Commit state changes
-        if: always()
+        if: always() # <-- Runs even if main.py fails
         run: |
           git config user.name "github-actions"
           git config user.email "actions@users.noreply.github.com"
@@ -82,3 +83,16 @@ jobs:
             git commit -m "Update state [skip ci]"
             git push
           fi
+
+      # ----------------- NEW STEP YOU REQUESTED -----------------
+      - name: Create Issue on Failure
+        if: failure() && github.event_name == 'schedule' # Only create on scheduled failures
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh issue create --title "YouTube Automation Failed: Secrets May Be Expired" \
+          --body "The automated workflow ('${{ github.workflow }}') failed to run. \
+          This often means the \`YTDLP_COOKIES_B64\` and \`YTDLP_PO_TOKEN_WEB\` secrets have expired and need to be regenerated. \
+          Please check the latest workflow run logs for details."
+      # ----------------- END NEW STEP -----------------
