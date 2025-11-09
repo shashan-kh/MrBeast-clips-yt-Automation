@@ -302,6 +302,41 @@ def try_download_auto_captions(video_id: str, lang: str = "en") -> Optional[Path
     cand = WORK_DIR / f"{video_id}.{lang}.vtt"
     return cand if cand.exists() else None
 
+# ----------------- BUG FIX: Added Missing Function -----------------
+def extract_keywords_for_segment(vtt_path: Optional[Path], start_sec: float, end_sec: float) -> List[str]:
+    """
+    Extracts prominent keywords from VTT captions within a specific time segment.
+    This is a basic implementation to fix the missing function error.
+    """
+    if not vtt_path or not vtt_path.exists():
+        return []
+    
+    try:
+        captions = webvtt.read(str(vtt_path))
+    except Exception as e:
+        print(f"Warning: Could not parse VTT file: {e}")
+        return []
+
+    words = []
+    for caption in captions:
+        # Check if the caption overlaps with the segment
+        if caption.start_in_seconds < end_sec and caption.end_in_seconds > start_sec:
+            text = caption.text.strip().lower()
+            text = re.sub(r"<[^>]+>", "", text)  # Remove VTT tags
+            text = re.sub(r"[^a-z\s]", "", text) # Remove punctuation
+            words.extend(text.split())
+
+    # Basic keyword extraction: count words, remove stopwords
+    word_counts = {}
+    for word in words:
+        if word and word not in STOPWORDS:
+            word_counts[word] = word_counts.get(word, 0) + 1
+    
+    # Get top 5 keywords
+    sorted_keywords = sorted(word_counts.items(), key=lambda item: item[1], reverse=True)
+    return [word for word, count in sorted_keywords[:5]]
+# ----------------- END BUG FIX -----------------
+
 # ------------------------- Download & Render -------------------------
 def download_full_video_hd(video_id: str, out_dir: Path) -> Path:
     out_path = out_dir / f"{video_id}.mp4"
@@ -479,7 +514,8 @@ def smart_title(base_title: str, clip_idx: int, total_clips: int, keywords: List
         key_phrase = " ".join([k.title() for k in keywords[:3]])
         title = f"{base} | {key_phrase} ({time_hint}) #Shorts"
     else:
-        title = f"{base} | Clip {clip_idx}/{total_clips} ({time_hint}) #Shorts"
+        # BUG FIX: Changed clip_idx to clip_idx+1 for 1-based numbering
+        title = f"{base} | Clip {clip_idx+1}/{total_clips} ({time_hint}) #Shorts"
     if len(title) > 100:
         over = len(title) - 100
         base_cut = max(0, len(base) - over - 3)
@@ -679,7 +715,15 @@ def main():
     if zip_tag and zip_name:
         ensure_zip_downloaded(zip_tag, zip_name, zip_path)
     else:
-        raise RuntimeError("Missing pre-render storage info; expected to have release ZIP.")
+        # This is the path for local testing (no GitHub Release)
+        # We need to download the full video if it's not already here
+        full_video_path = WORK_DIR / f"{src_id}.mp4"
+        if not full_video_path.exists():
+            print("No release storage found. Downloading full video for rendering...")
+            download_full_video_hd(src_id, WORK_DIR)
+        else:
+            print("Using existing full video for rendering.")
+
 
     uploaded_count = 0
     for seg in to_upload:
@@ -687,12 +731,20 @@ def main():
         start, end = seg["start"], seg["end"]
         tmp_clip = WORK_DIR / f"{src_id}_clip_{idx:03d}.mp4"
 
-        # Extract from pre-rendered ZIP
-        extract_clip(zip_path, src_id, idx, tmp_clip)
+        if zip_tag and zip_name:
+            # Extract from pre-rendered ZIP
+            extract_clip(zip_path, src_id, idx, tmp_clip)
+        else:
+            # Render on-the-fly (local testing path)
+            print(f"Rendering clip {idx}...")
+            full_video_path = WORK_DIR / f"{src_id}.mp4" # Should exist from check above
+            if not full_video_path.exists():
+                 raise RuntimeError(f"Could not find {full_video_path} for on-the-fly rendering.")
+            render_vertical_segment(full_video_path, start, end, tmp_clip)
 
         # Metadata
         keywords = seg.get("keywords", [])
-        title = smart_title(current["video_title"], idx+1, seg_total, keywords, start, end)
+        title = smart_title(current["video_title"], idx, seg_total, keywords, start, end)
         base_tags = current.get("video_tags", []) or []
         tags = list(dict.fromkeys((["Shorts","highlight"] + base_tags + [k for k in keywords])))[:15]
         description = f"Highlight from: https://youtu.be/{src_id}\n#Shorts"
@@ -719,6 +771,12 @@ def main():
                 print(f"[cleanup] Warning: {e}")
         state["processed_video_ids"].append(current["video_id"])
         state["current"] = None
+        
+        # Clean up the full video file if it exists (for local path)
+        try:
+            (WORK_DIR / f"{src_id}.mp4").unlink(missing_ok=True)
+        except Exception:
+            pass
 
     state["last_run"] = datetime.now(timezone.utc).isoformat()
     save_state(state)
