@@ -49,8 +49,8 @@ COOKIES_PATH = os.getenv("YTDLP_COOKIES", "").strip()
 YTDLP_PLAYER_CLIENTS = os.getenv("YTDLP_PLAYER_CLIENTS", "tv_embedded,tv,ios,mweb,web,android")
 YTDLP_UA = os.getenv("YTDLP_UA", "Mozilla/5.0 (Linux; Android 12; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36")
 # Optional PO tokens for clients that require it (android/web)
-YTDLP_PO_TOKEN_ANDROID = os.getenv("YTDLP_PO_TOKEN_ANDROID", "").strip()
-YTDLP_PO_TOKEN_WEB = os.getenv("YTDLP_PO_TOKEN_WEB", "").strip()
+YTDLP_PO_TOKEN_ANDROID = os.getenv("YTDLP_PO_TOKEN_ANDROID", "").strip().split("&", 1)[0]
+YTDLP_PO_TOKEN_WEB = os.getenv("YTDLP_PO_TOKEN_WEB", "").strip().split("&", 1)[0]
 # Extra raw extractor args (optional, advanced), e.g. "hl=en,gl=US"
 YTDLP_EXTRACTOR_ARGS_EXTRA = os.getenv("YTDLP_EXTRACTOR_ARGS_EXTRA", "").strip()
 
