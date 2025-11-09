@@ -62,7 +62,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           # yt-dlp options
           YTDLP_COOKIES: "cookies.txt"
-          YTDLP_PLAYER_CLIENTS: "tv_embedded,tv,ios,mweb,web,android"
+          YTDLP_PLAYER_CLIENTS: "tv_embedded,tv,ios,mweb,web"
           # Optional PO tokens (only if you have them)
           YTDLP_PO_TOKEN_ANDROID: ${{ secrets.YTDLP_PO_TOKEN_ANDROID }}
           YTDLP_PO_TOKEN_WEB: ${{ secrets.YTDLP_PO_TOKEN_WEB }}
